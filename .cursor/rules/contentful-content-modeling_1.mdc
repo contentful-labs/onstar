@@ -1,0 +1,534 @@
+---
+description: "Contentful content modeling principles, field types, naming conventions, and best practices. Use this rule whenever working with Contentful content types, content models, CMA API payloads, migration scripts, or discussing content architecture for a Contentful space."
+globs: 
+alwaysApply: false
+---
+
+# Contentful Content Modeling
+
+You are an expert Contentful content architect. When designing content types, generating CMA API JSON, writing migration scripts, or advising on content model structure, follow these principles and constraints.
+
+## Core Philosophy
+
+Contentful is a composable content platform. Content is structured, channel-independent, and API-first. Every modeling decision should optimize for:
+
+1. **Reusability** — content created once, delivered everywhere (web, mobile, kiosk, voice, email)
+2. **Editor experience** — content authors should find the model intuitive, not overwhelming
+3. **Query efficiency** — avoid deep nesting that forces excessive API includes or GraphQL depth
+4. **Evolvability** — the model should accommodate growth without breaking existing consumers
+
+Think content-first, not page-first. A content-oriented model separates *what the content is* from *how it is displayed*. Avoid mirroring page layouts in your content types.
+
+## Contentful Field Types Reference
+
+These are the valid field types in the Contentful Content Management API:
+
+| Field Type | JSON `type` value | Use Case |
+|---|---|---|
+| Short text | `Symbol` | Titles, slugs, tags, labels. Max 256 chars. Searchable, sortable, filterable. |
+| Long text | `Text` | Body copy, markdown, descriptions. Not sortable or filterable. |
+| Rich Text | `RichText` | Structured rich content with embedded entries/assets. |
+| Integer | `Integer` | Whole numbers — sort order, quantity, year. |
+| Decimal | `Number` | Prices, ratings, percentages. |
+| Date & time | `Date` | ISO 8601 dates — publish date, event date, expiry. |
+| Boolean | `Boolean` | Toggles — featured, active, visible. |
+| Location | `Location` | Latitude/longitude coordinates. |
+| JSON object | `Object` | Arbitrary structured data (use sparingly — not queryable). |
+| Media (single) | `Link` with `linkType: "Asset"` | Single image, video, PDF, or file. |
+| Reference (single) | `Link` with `linkType: "Entry"` | Link to one entry of specified content type(s). |
+| Media (many) | `Array` with items `Link`/`Asset` | Gallery, attachments. |
+| Reference (many) | `Array` with items `Link`/`Entry` | Related articles, page sections, component list. |
+| Tags / list of text | `Array` with items `Symbol` | Tags, categories, features list. |
+
+### Field type selection guidance
+
+- Use `Symbol` (not `Text`) for anything that needs to be searched, sorted, or filtered via the API. `Text` fields cannot be used in equality or ordering queries.
+- Use `RichText` when editors need inline formatting, embedded entries, and embedded assets within body content. Use `Text` for plain or markdown content where inline embeds are unnecessary.
+- Use `Link` (reference) to connect entries rather than duplicating data. This is fundamental to Contentful's relational model.
+- Use `Object` only for small, well-defined data that doesn't need to be queried or validated by Contentful — the canonical example is a focal point coordinate (`{ "x": 0.5, "y": 0.3 }`). Avoid `Object` for data with a predictable, complex shape that would benefit from its own fields and validations; model that as a separate content type instead.
+- Prefer `Array` of `Symbol` for simple tag lists. Use `Array` of `Link`/`Entry` when the items themselves have structure (fields, relationships).
+
+## Content Type JSON Structure (CMA API)
+
+When generating content type definitions, use this structure:
+
+```json
+{
+  "name": "Blog Post",
+  "description": "Articles published on the company blog",
+  "displayField": "internalTitle",
+  "fields": [
+    {
+      "id": "internalTitle",
+      "name": "Internal Title",
+      "type": "Symbol",
+      "required": true,
+      "localized": false,
+      "validations": [
+        { "size": { "min": 1, "max": 200 } }
+      ]
+    },
+    {
+      "id": "title",
+      "name": "Title",
+      "type": "Symbol",
+      "required": true,
+      "localized": true,
+      "validations": [
+        { "size": { "min": 1, "max": 150 } }
+      ]
+    },
+    {
+      "id": "slug",
+      "name": "Slug",
+      "type": "Symbol",
+      "required": true,
+      "localized": false,
+      "validations": [
+        { "unique": true },
+        { "regexp": { "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "flags": null } }
+      ]
+    },
+    {
+      "id": "body",
+      "name": "Body",
+      "type": "RichText",
+      "required": false,
+      "localized": true,
+      "validations": []
+    },
+    {
+      "id": "featuredImage",
+      "name": "Featured Image",
+      "type": "Link",
+      "linkType": "Entry",
+      "required": false,
+      "localized": false,
+      "validations": [
+        { "linkContentType": ["imageWrapper"] }
+      ]
+    },
+    {
+      "id": "author",
+      "name": "Author",
+      "type": "Link",
+      "linkType": "Entry",
+      "required": false,
+      "localized": false,
+      "validations": [
+        { "linkContentType": ["author"] }
+      ]
+    },
+    {
+      "id": "tags",
+      "name": "Tags",
+      "type": "Array",
+      "required": false,
+      "localized": false,
+      "items": {
+        "type": "Symbol",
+        "validations": []
+      }
+    },
+    {
+      "id": "callToAction",
+      "name": "Call to Action",
+      "type": "Link",
+      "linkType": "Entry",
+      "required": false,
+      "localized": false,
+      "validations": [
+        { "linkContentType": ["cta"] }
+      ]
+    }
+  ]
+}
+```
+
+### Key structural rules
+
+- **Every content type must have an `internalTitle` field** — a `Symbol` field named "Internal Title", set as the `displayField`. This field is used exclusively for searching and identifying entries in the Contentful web app. It is never rendered in any frontend. It should be `required: true` and is always the first field in the content type. This is distinct from any user-facing `title` or `headline` field.
+- **`displayField`** must always be set to `"internalTitle"`.
+- **`id`** is the API identifier. Use `camelCase`. It must be 2–60 characters, alphanumeric with dashes, underscores, or periods. Once set and published, changing it is a breaking change for API consumers.
+- **`name`** is the human-readable label editors see. Use Title Case.
+- **`required: true`** means the entry cannot be published without this field populated.
+- **`localized: true`** means this field can have different values per locale.
+- A content type can have a maximum of **50 fields**.
+
+## Naming Conventions
+
+### Content type IDs
+- Use `camelCase` (e.g., `blogPost`, `heroSection`, `navigationMenu`)
+- Be descriptive but concise
+- Avoid prefixes like `ct_` or suffixes like `_type`
+
+### Field IDs
+- Use `camelCase` (e.g., `featuredImage`, `publishDate`, `callToAction`)
+- Name for what the content *is*, not where it appears (e.g., `headline` not `topBannerText`)
+
+### Common field naming patterns
+
+| Purpose | Recommended ID | Type |
+|---|---|---|
+| Internal entry name | `internalTitle` | `Symbol` — **required on every content type**, set as `displayField`. For editor search only, never rendered. |
+| Entry title (rendered) | `title` or `headline` | `Symbol` |
+| URL-safe identifier | `slug` | `Symbol` with regex + unique validation |
+| Subtitle / tagline | `subtitle` | `Symbol` |
+| Body content | `body` or `content` | `RichText` or `Text` |
+| Summary / excerpt | `summary` | `Text` (or `Symbol` if short) |
+| Image | `image` or `featuredImage` | `Link` (Entry) → `imageWrapper` content type |
+| Publication date | `publishDate` | `Date` |
+| Author reference | `author` | `Link` (Entry) |
+| Category/taxonomy | `category` | `Link` (Entry) or `Array` of `Link` (Entry) |
+| Tags | `tags` | `Array` of `Symbol` |
+| Sort/display order | `sortOrder` | `Integer` |
+| Boolean toggles | `isFeatured`, `isActive` | `Boolean` |
+| SEO metadata | `seoMetadata` | `Link` (Entry) to a shared SEO content type |
+| Page sections | `sections` | `Array` of `Link` (Entry) |
+| Call to action | `callToAction` | `Link` (Entry) → `cta` content type |
+| Inline link URL | `url` | `Symbol` with URL validation |
+| Inline link text | `linkText` | `Symbol` |
+| Inline link target | `openInNewTab` | `Boolean` |
+
+## Content Modeling Patterns
+
+### Pattern 1: Composable Pages
+
+Instead of creating rigid page content types with fixed fields, use a composable pattern where pages reference an ordered array of section/component entries:
+
+```
+Page
+  ├── internalTitle (Symbol, required, displayField)
+  ├── title (Symbol, localized)
+  ├── slug (Symbol, unique)
+  ├── seoMetadata (Link → SEO Metadata)
+  └── sections (Array of Links → Hero, Feature Grid, CTA Block, Testimonial, etc.)
+```
+
+Each section type is its own content type with its own fields. Editors assemble pages by adding and reordering section entries. This gives editorial teams freedom without developer involvement for every layout change.
+
+**When to use:** Marketing sites, landing pages, any context where editors need layout flexibility.
+
+**When to avoid:** Highly structured content like product catalogs or documentation where consistency matters more than flexibility.
+
+### Pattern 2: Required Shared Component Types
+
+Every Contentful space should include these foundational component content types. They are referenced by other content types — never used standalone.
+
+#### CTA (Call to Action)
+
+Always create a dedicated `cta` content type. CTAs appear throughout a site (hero banners, cards, modals, footers) and must be consistently structured:
+
+```
+CTA (id: "cta")
+  ├── internalTitle (Symbol, required, displayField)
+  ├── label (Symbol, required, localized) — the button/link text
+  ├── url (Symbol, required) — the destination URL or relative path
+  ├── openInNewTab (Boolean) — whether to use target="_blank"
+  └── style (Symbol) — controls rendering; validated to: "primary", "secondary", "link"
+```
+
+The `style` field uses an `in` validation: `{ "in": ["primary", "secondary", "link"] }`. "primary" renders as a prominent button, "secondary" as a less prominent button, and "link" renders as a text hyperlink. The frontend maps these values to the appropriate component.
+
+CMA JSON for the `style` field:
+```json
+{
+  "id": "style",
+  "name": "Style",
+  "type": "Symbol",
+  "required": false,
+  "localized": false,
+  "validations": [
+    { "in": ["primary", "secondary", "link"] }
+  ]
+}
+```
+
+#### Image Wrapper
+
+Never link directly to a Contentful Asset for images. Always use an `imageWrapper` content type that bundles the image with its metadata. This ensures accessibility (alt text) and enables automated cropping (focal point) without manual intervention:
+
+```
+Image Wrapper (id: "imageWrapper")
+  ├── internalTitle (Symbol, required, displayField)
+  ├── image (Link → Asset, required) — the actual image file
+  ├── altText (Symbol, required, localized) — accessibility alt attribute
+  └── focalPoint (Object) — JSON with x/y coordinates for smart cropping
+```
+
+The `focalPoint` field stores a JSON object like `{ "x": 0.5, "y": 0.3 }` where `x` and `y` are decimal values between 0 and 1 representing the horizontal and vertical center of interest. The frontend uses this to crop or resize the image at any aspect ratio without cutting off the subject. When no focal point is set, the frontend should default to `{ "x": 0.5, "y": 0.5 }` (center).
+
+CMA JSON for the Image Wrapper content type:
+```json
+{
+  "name": "Image Wrapper",
+  "description": "Wraps an image asset with alt text and focal point for accessible, smart-cropping images",
+  "displayField": "internalTitle",
+  "fields": [
+    {
+      "id": "internalTitle",
+      "name": "Internal Title",
+      "type": "Symbol",
+      "required": true,
+      "localized": false
+    },
+    {
+      "id": "image",
+      "name": "Image",
+      "type": "Link",
+      "linkType": "Asset",
+      "required": true,
+      "localized": false,
+      "validations": [
+        { "linkMimetypeGroup": ["image"] }
+      ]
+    },
+    {
+      "id": "altText",
+      "name": "Alt Text",
+      "type": "Symbol",
+      "required": true,
+      "localized": true,
+      "validations": [
+        { "size": { "min": 1, "max": 256 } }
+      ]
+    },
+    {
+      "id": "focalPoint",
+      "name": "Focal Point",
+      "type": "Object",
+      "required": false,
+      "localized": false
+    }
+  ]
+}
+```
+
+When any content type needs an image, reference the `imageWrapper` type — not a raw Asset link. For example, a hero section's image field should be `{ "type": "Link", "linkType": "Entry", "validations": [{ "linkContentType": ["imageWrapper"] }] }`.
+
+#### SEO Metadata
+
+```
+SEO Metadata (id: "seoMetadata")
+  ├── internalTitle (Symbol, required, displayField)
+  ├── metaTitle (Symbol, localized) — the <title> tag
+  ├── metaDescription (Text, localized) — the meta description
+  ├── ogImage (Link → imageWrapper) — social sharing image
+  └── noIndex (Boolean) — whether to add noindex directive
+```
+
+### Pattern 3: Inline Link Fields
+
+When a content type needs a simple link (e.g., a card that links somewhere, a banner with a URL), include the link fields directly on the content type rather than creating a separate reference. Use this pattern for content types where the link is intrinsic to the content — not a standalone reusable CTA.
+
+```
+// Inline link fields — add directly to the content type
+linkUrl (Symbol) — the destination URL
+linkText (Symbol, localized) — display text for the link
+openInNewTab (Boolean) — target behavior
+```
+
+Use inline link fields when the link is a simple, single destination that belongs to this specific piece of content. Use a reference to the `cta` content type when you need styled buttons, reusable CTAs shared across entries, or multiple CTAs on a single content type.
+
+### Pattern 4: Content-Oriented Modeling
+
+Model content around *what it is*, not *where it goes*:
+
+- ✅ `Event` with `name`, `date`, `venue`, `description`, `speakers`
+- ❌ `EventPageContent` with `bannerImage`, `leftColumnText`, `rightColumnSpeakers`
+
+The content-oriented model works on a website, a mobile app, a digital kiosk, and an email — because it describes the event, not a specific page layout.
+
+### Pattern 5: Taxonomy and Classification
+
+For categories, tags, and hierarchical classification:
+
+- Simple flat tags → `Array` of `Symbol` on the content type itself
+- Managed taxonomy (editors can add/edit categories) → Separate `Category` content type referenced via `Link`
+- Hierarchical taxonomy → `Category` content type with a self-referencing `parentCategory` field (Link to `Category`)
+
+### Pattern 6: Localization Strategy
+
+Decide localization at the field level, not the content type level:
+
+- **Localize:** titles, body text, CTAs, alt text — anything with language-specific meaning
+- **Don't localize:** slugs (usually), dates, booleans, sort order, references to shared assets, numeric values
+- If a market needs entirely different content (not just translation), create separate entries per locale rather than localizing every field
+
+### Pattern 7: Navigation
+
+Model site navigation as content so editors can manage it without deployments:
+
+```
+Navigation Menu
+  ├── internalTitle (Symbol, required, displayField)
+  ├── name (Symbol) — e.g., "Main Nav", "Footer Nav"
+  └── items (Array of Links → Navigation Item)
+
+Navigation Item
+  ├── internalTitle (Symbol, required, displayField)
+  ├── label (Symbol, localized)
+  ├── url (Symbol) — external URL or relative path
+  ├── page (Link → Page) — internal page reference (alternative to url)
+  └── children (Array of Links → Navigation Item) — for dropdowns
+```
+
+## Validation Best Practices
+
+Apply validations to protect content quality without over-constraining editors:
+
+- **Slugs:** Always add `unique: true` and a regex validation for URL-safe characters
+- **Required fields:** Only mark truly essential fields as required. Over-requiring fields frustrates editors and slows content creation.
+- **Link validations:** Always specify `linkContentType` to restrict which content types a reference field accepts. Without this, editors see every content type in the picker.
+- **Asset validations:** Use `linkMimetypeGroup` (e.g., `["image"]`) to restrict media fields to appropriate file types.
+- **Enum-like fields:** Use `Symbol` with an `in` validation for controlled vocabularies (e.g., `{ "in": ["primary", "secondary", "outline"] }` for button styles).
+- **Size validations:** Set reasonable min/max on `Symbol` fields for titles and slugs to prevent accidents.
+
+## Common Mistakes to Avoid
+
+1. **Creating page-shaped content types** — Don't model `Homepage` with `heroBannerTitle`, `heroBannerImage`, `section2Title`, `section2Body`. Use composable sections instead.
+
+2. **Deeply nesting references** — Each level of reference nesting requires an additional `include` level in API queries (max 10). Aim for 2–3 levels max. If your model requires 5+ levels of includes to render a page, flatten it.
+
+3. **Duplicating fields across content types** — If three content types all have the same five SEO fields, extract them into a shared SEO Metadata content type and reference it.
+
+4. **Using `Object` fields for structured data** — If the data has a predictable shape, model it as a content type with proper fields instead. `Object` fields are opaque to the Contentful web app, not queryable, and not validatable.
+
+5. **Not setting `displayField`** — Without a `displayField`, entry titles appear as "Untitled" in the web app, making it impossible for editors to find content.
+
+6. **Ignoring the 50-field limit** — Content types are capped at 50 fields. If you're approaching this limit, your content type is probably trying to do too much. Split it.
+
+7. **Making slugs localized** — Usually slugs should be consistent across locales for URL routing. Only localize slugs if you genuinely need different URL paths per language (e.g., `/about-us` vs `/a-propos`).
+
+8. **Forgetting `linkContentType` on reference fields** — Without content type restrictions, reference pickers show every type in the space, confusing editors and leading to invalid references.
+
+9. **Linking directly to Assets for images** — Never use `{ "type": "Link", "linkType": "Asset" }` for image fields on content types. Always reference the `imageWrapper` content type instead, which bundles alt text for accessibility and a focal point for smart cropping. Raw asset links lose this metadata.
+
+10. **Missing `internalTitle`** — Every content type must have an `internalTitle` (Symbol) field as its `displayField`. Without it, editors cannot search for or identify entries in the web app. This field is never rendered in any frontend.
+
+## Migration Script Pattern (contentful-cli)
+
+When generating Contentful migration scripts (JavaScript), use the `contentful-migration` module format:
+
+```javascript
+module.exports = function (migration) {
+  const blogPost = migration.createContentType('blogPost', {
+    name: 'Blog Post',
+    description: 'Articles published on the company blog',
+    displayField: 'internalTitle'
+  });
+
+  // Internal Title — always first, always required, never rendered
+  blogPost.createField('internalTitle', {
+    name: 'Internal Title',
+    type: 'Symbol',
+    required: true,
+    validations: [
+      { size: { min: 1, max: 200 } }
+    ]
+  });
+
+  blogPost.createField('title', {
+    name: 'Title',
+    type: 'Symbol',
+    required: true,
+    localized: true,
+    validations: [
+      { size: { min: 1, max: 150 } }
+    ]
+  });
+
+  blogPost.createField('slug', {
+    name: 'Slug',
+    type: 'Symbol',
+    required: true,
+    validations: [
+      { unique: true },
+      { regexp: { pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' } }
+    ]
+  });
+
+  blogPost.createField('body', {
+    name: 'Body',
+    type: 'RichText',
+    localized: true
+  });
+
+  // Reference to imageWrapper — not a raw Asset link
+  blogPost.createField('featuredImage', {
+    name: 'Featured Image',
+    type: 'Link',
+    linkType: 'Entry',
+    validations: [
+      { linkContentType: ['imageWrapper'] }
+    ]
+  });
+
+  blogPost.createField('author', {
+    name: 'Author',
+    type: 'Link',
+    linkType: 'Entry',
+    validations: [
+      { linkContentType: ['author'] }
+    ]
+  });
+
+  blogPost.createField('tags', {
+    name: 'Tags',
+    type: 'Array',
+    items: {
+      type: 'Symbol',
+      validations: []
+    }
+  });
+
+  blogPost.createField('callToAction', {
+    name: 'Call to Action',
+    type: 'Link',
+    linkType: 'Entry',
+    validations: [
+      { linkContentType: ['cta'] }
+    ]
+  });
+
+  // Set field ordering in the editor
+  blogPost.moveField('internalTitle').toTheTop();
+  blogPost.moveField('title').afterField('internalTitle');
+  blogPost.moveField('slug').afterField('title');
+  blogPost.moveField('featuredImage').afterField('slug');
+  blogPost.moveField('body').afterField('featuredImage');
+
+  // Configure editor appearance
+  blogPost.changeFieldControl('slug', 'builtin', 'slugEditor');
+  blogPost.changeFieldControl('body', 'builtin', 'richTextEditor');
+};
+```
+
+### Migration script conventions
+
+- Export a single function that receives `migration` as its argument
+- Create content types with `migration.createContentType(id, options)`
+- Create fields with `contentType.createField(id, options)`
+- Use `moveField` to set a logical editor ordering (title and slug first, then primary content, then metadata)
+- Use `changeFieldControl` to set appropriate editor widgets
+- One migration file per logical change (don't mix unrelated changes)
+- Name migration files with a timestamp prefix: `20250410-create-blog-post.js`
+
+## Checklist Before Finalizing a Content Model
+
+Before delivering a content model, verify:
+
+- [ ] Every content type has an `internalTitle` field (Symbol, required) set as the `displayField`
+- [ ] The `cta` content type exists with `label`, `url`, `openInNewTab`, and `style` fields
+- [ ] The `imageWrapper` content type exists with `image` (Asset link), `altText`, and `focalPoint` (Object) fields
+- [ ] All image fields reference `imageWrapper` entries — never raw Asset links
+- [ ] Slugs have `unique` and `regexp` validations
+- [ ] All reference fields have `linkContentType` restrictions
+- [ ] All asset fields (on `imageWrapper`) have `linkMimetypeGroup` restrictions
+- [ ] No content type exceeds 50 fields
+- [ ] Shared patterns (SEO, CTA, imageWrapper) are extracted into reusable component types
+- [ ] Localization is set at the field level with clear rationale
+- [ ] Reference depth does not exceed 3 levels for typical page rendering
+- [ ] Field IDs use camelCase and describe the content, not the presentation
+- [ ] Content type descriptions are filled in (they appear in the web app and help editors)
+- [ ] Content types that need simple links have inline link fields (`linkUrl`, `linkText`, `openInNewTab`)
